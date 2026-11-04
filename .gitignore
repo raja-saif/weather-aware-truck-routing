@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+backend/staticfiles/*
+!backend/staticfiles/.gitkeep
+
+# Node
+node_modules/
+frontend/dist/
+
+# Env / editors / OS
+.env
+.env.*
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.log
+
+# Assessment brief (keep out of the public repo)
+*.pdf
