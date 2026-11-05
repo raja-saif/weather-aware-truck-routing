@@ -14,12 +14,12 @@ The driver enters an origin, destination, departure time and load weight. The ap
 | Route ranking and recommendation | Done, unit-tested |
 | Routing, weather and geocoding providers | Done, tested with mocked HTTP |
 | REST API for planning and heatmap | Done, tested |
-| React frontend with map and heatmap | In progress |
+| React frontend with map, checkpoints and heatmap | Done |
 | Deployment | Planned |
 
 ## Design so far
 
-The core logic lives in `backend/planner/domain/` as pure functions with no I/O, so every rule can be tested exactly. Third-party calls live in `backend/planner/services/`, and `planning.py` ties the two together.
+The frontend (React, TypeScript, MapLibre GL) is in `frontend/`. The core logic lives in `backend/planner/domain/` as pure functions with no I/O, so every rule can be tested exactly. Third-party calls live in `backend/planner/services/`, and `planning.py` ties the two together.
 
 - **`risk.py`** applies the risk table. Shared range edges such as "25–34" and "35–44" are treated as half-open bands, where the lower bound belongs to the band. The spec's ">1.00" and ">3.0" are honored, so exactly 1.00 in/hr of rain is still Severe. Load rules escalate wind only, with strict thresholds: over 30,000 lb and over 40,000 lb. A checkpoint's level is the worst of wind, rain and snow.
 - **`geo.py`** places checkpoints at mile 0, every interval, and the destination, so gaps never exceed the interval. Each checkpoint covers the road halfway to its neighbors, so risk miles sum to the route length.
@@ -41,12 +41,33 @@ The core logic lives in `backend/planner/domain/` as pure functions with no I/O,
 
 Errors are always shaped as `{"error": {"code", "message", "fields?"}}`. Validation errors return 400, unplannable trips 422, and provider problems 502 or 503.
 
-## Running the backend
+## Frontend
+
+- **Map.** All three routes, with every checkpoint colored by its risk level. Hover a checkpoint for a summary, or click it for full detail: wind, rain and snow at the ETA, the level of each, and any load rule applied. Each route has a label with its distance, trip time and risk miles.
+- **Results panel.** The **Routes** tab shows the recommendation with a plain-English reason for each comparison, and the three route options. The **Checkpoints** tab shows the selected route's risk profile, HOS stops and a checkpoint table.
+- **Heatmap.** A 0–48 h slider over the trip corridor, with Risk, Wind, Rain and Snow views. All 49 frames are pre-rendered, so the slider and playback never wait on the network. A truck for each route moves along with the slider.
+
+## Running locally
+
+Prerequisites are Python 3.10+ and Node 20+.
 
 ```bash
+# backend
 cd backend
-python -m venv .venv
-.venv/bin/pip install -r requirements-dev.txt     # Windows: .venv\Scripts\pip
-.venv/bin/python -m pytest                        # no network needed (providers are mocked)
-.venv/bin/python manage.py runserver              # http://127.0.0.1:8000/api/health
+python -m venv .venv && .venv/bin/pip install -r requirements-dev.txt   # Windows: .venv\Scripts\pip
+.venv/bin/python manage.py runserver                                    # http://127.0.0.1:8000
+
+# frontend (second terminal)
+cd frontend
+npm ci
+npm run dev                                                             # http://localhost:5173, proxies /api to Django
+```
+
+To run the production build locally, run `npm run build` in `frontend`. Django then serves the app at `http://127.0.0.1:8000`.
+
+### Tests
+
+```bash
+cd backend && .venv/bin/python -m pytest      # no network needed (providers are mocked)
+cd frontend && npx vitest run && npx tsc -b && npx eslint .
 ```
