@@ -213,7 +213,7 @@ export default function App() {
           {!plan && !planLoading && <Intro />}
 
           <footer className="credits">
-            Routing: Valhalla (truck) / OSRM · Weather: Open-Meteo · Places: Photon · Map: OpenFreeMap, © OpenStreetMap
+            Routing: Valhalla (truck) / OSRM · Weather: Open-Meteo / MET Norway · Places: Photon / Open-Meteo · Map: OpenFreeMap, © OpenStreetMap
             contributors
           </footer>
         </div>

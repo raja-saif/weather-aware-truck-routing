@@ -45,6 +45,9 @@ def _probes() -> dict:
             params={"latitude": _A[0], "longitude": _A[1], "hourly": "wind_speed_10m", "forecast_days": 1},
             timeout=TIMEOUT,
         ),
+        "metno_forecast": lambda: session().get(
+            settings.METNO_URL, params={"lat": f"{_A[0]:.2f}", "lon": f"{_A[1]:.2f}"}, timeout=TIMEOUT
+        ),
     }
 
 

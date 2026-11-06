@@ -1,4 +1,4 @@
-"""Hourly forecasts from Open-Meteo, batched and cached.
+"""Hourly forecasts from Open-Meteo, batched and cached (MET Norway as fallback).
 
 * Locations are snapped to a 0.05 deg lattice (~3.5 mi). Forecast models run at
   3-13 km resolution, so this loses nothing, and it lets checkpoints on shared
@@ -27,9 +27,15 @@ from django.core.cache import cache
 from ..api.errors import UpstreamError
 from ..domain.geo import Coord
 from ..domain.risk import WeatherSample
+from . import metno
 from .http import DEFAULT_TIMEOUT, session
 
 log = logging.getLogger(__name__)
+
+# After Open-Meteo refuses (e.g. its daily free quota on a shared cloud IP),
+# use the MET Norway fallback for a while without asking Open-Meteo first.
+OPEN_METEO_DOWN_KEY = "provider-down:open-meteo"
+PROVIDER_DOWN_TTL = 30 * 60
 
 LATTICE_DEG = 0.05
 # Coarser lattices used when a request would exceed the location budget (the
@@ -58,6 +64,7 @@ class HourlySeries:
     temp: tuple[float, ...]
     code: tuple[int, ...]
     wdir: tuple[float, ...] = ()  # direction the wind blows FROM, degrees (optional)
+    source: str = "Open-Meteo"
 
     @property
     def hours(self) -> int:
@@ -190,6 +197,32 @@ def _fetch_batch(points: list[Coord], window: Window) -> list[HourlySeries]:
     return [_parse(item, window) for item in items]
 
 
+def _fetch_open_meteo(points: list[Coord], window: Window) -> list[HourlySeries]:
+    batches = [points[i : i + BATCH_SIZE] for i in range(0, len(points), BATCH_SIZE)]
+    with ThreadPoolExecutor(max_workers=min(MAX_PARALLEL, len(batches))) as pool:
+        fetched = list(pool.map(lambda b: _fetch_batch(b, window), batches))
+    return [s for batch in fetched for s in batch]
+
+
+def _fetch_missing(points: list[Coord], window: Window) -> list[HourlySeries]:
+    """Open-Meteo first; MET Norway when Open-Meteo is over quota or down."""
+    error: UpstreamError | None = None
+    if not cache.get(OPEN_METEO_DOWN_KEY):
+        try:
+            return _fetch_open_meteo(points, window)
+        except UpstreamError as exc:
+            log.warning("Open-Meteo failed (%s); falling back to MET Norway", exc.code)
+            cache.set(OPEN_METEO_DOWN_KEY, True, PROVIDER_DOWN_TTL)
+            error = exc
+    try:
+        return metno.fetch(points, window.start, window.hours)
+    except metno.Unavailable as exc:
+        log.error("MET Norway fallback failed: %s", exc)
+        raise error or UpstreamError(
+            "Weather service is unreachable. Please try again shortly.", code="weather_unavailable"
+        ) from exc
+
+
 def _cache_key(p: Coord, window: Window) -> str:
     return f"wx:{p[0]:.2f},{p[1]:.2f}:{window.start}:{window.end}"
 
@@ -228,14 +261,10 @@ def fetch(points: Iterable[Coord], window: Window, *, lattice: float = LATTICE_D
         else:
             result[k] = series
     if missing:
-        batches = [missing[i : i + BATCH_SIZE] for i in range(0, len(missing), BATCH_SIZE)]
-        with ThreadPoolExecutor(max_workers=min(MAX_PARALLEL, len(batches))) as pool:
-            fetched = list(pool.map(lambda b: _fetch_batch(b, window), batches))
         fresh = {}
-        for batch, series_list in zip(batches, fetched):
-            for k, series in zip(batch, series_list):
-                result[k] = series
-                fresh[cache_keys[k]] = series
+        for k, series in zip(missing, _fetch_missing(missing, window)):
+            result[k] = series
+            fresh[cache_keys[k]] = series
         cache.set_many(fresh, CACHE_TTL)
     log.info("weather: %d locations (%d cached, %d fetched)", len(keys), len(keys) - len(missing), len(missing))
     return result

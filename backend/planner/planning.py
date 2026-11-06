@@ -247,7 +247,7 @@ def plan_trip(req: TripRequest) -> dict:
         "departure_advice": advice,
         "notes": notes,
         "weather": {
-            "source": "Open-Meteo",
+            "source": " + ".join(sorted({s.source for s in field.series.values()})) or "Open-Meteo",
             "lattice_deg": field.lattice,
             "locations": len(field.series),
             "window_start": _iso(window.start),

@@ -115,8 +115,11 @@ LOGGING = {
 # commercial endpoint can be swapped in without code changes.
 # ---------------------------------------------------------------------------
 HTTP_USER_AGENT = os.environ.get(
-    "HTTP_USER_AGENT", "WeatherAwareTruckRouting/1.0 (assessment demo)"
+    "HTTP_USER_AGENT",
+    # MET Norway requires an identifying User-Agent with a way to reach the operator.
+    "WeatherAwareTruckRouting/1.0 (+https://github.com/raja-saif/weather-aware-truck-routing)",
 )
+METNO_URL = os.environ.get("METNO_URL", "https://api.met.no/weatherapi/locationforecast/2.0/complete")
 VALHALLA_URL = os.environ.get("VALHALLA_URL", "https://valhalla1.openstreetmap.de/route")
 OSRM_URL = os.environ.get("OSRM_URL", "https://router.project-osrm.org/route/v1/driving")
 PHOTON_URL = os.environ.get("PHOTON_URL", "https://photon.komoot.io/api/")
