@@ -54,4 +54,4 @@ def heatmap(request):
     body = HeatmapRequestSerializer(data=request.data)
     body.is_valid(raise_exception=True)
     data = body.validated_data
-    return Response(plan_heatmap(data["departure_time"], data["load_weight_lb"], data["routes"]))
+    return Response(plan_heatmap(data["departure_time"], data["load_weight_lb"], data["routes"], body.storm_or_none()))

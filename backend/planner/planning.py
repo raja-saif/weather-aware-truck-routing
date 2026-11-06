@@ -12,7 +12,8 @@ from django.conf import settings
 from .domain import corridor, geo
 from .domain.geo import Coord
 from .domain.recommend import RouteScore, recommend
-from .domain.risk import RiskLevel, assess
+from .domain.risk import RiskAssessment, RiskLevel, WeatherSample, assess
+from .domain.scenario import Storm
 from .domain.timeline import HosPolicy, Timeline
 from .services import routing, weather
 
@@ -41,6 +42,8 @@ class TripRequest:
     load_lb: float
     interval_mi: int
     hos: bool
+    scenario: str = "live"  # "live" or "storm" (synthetic demo storm over the real forecast)
+    storm: Storm | None = None  # reuse a previous plan's demo storm instead of placing a new one
 
 
 def _iso(ts: float) -> str:
@@ -120,6 +123,19 @@ def plan_trip(req: TripRequest) -> dict:
     )
     t_weather = time.perf_counter()
 
+    storm = None
+    if req.scenario == "storm":
+        fastest = prepared[0]  # routes are sorted fastest first
+        storm = req.storm or Storm.meeting_route(
+            fastest.raw.coords, fastest.raw.cum_miles, fastest.timeline.offset_at(fastest.raw.miles / 2), dep_ts
+        )
+
+    def assess_at(p: _Prepared, k: int, t: float) -> tuple[WeatherSample, RiskAssessment]:
+        sample = field.at(p.points[k]).sample_at(t)
+        if storm:
+            sample = storm.apply(sample, p.points[k], t)
+        return sample, assess(sample, req.load_lb)
+
     routes_out, scores = [], []
     for idx, p in enumerate(prepared):
         rid = ROUTE_IDS[idx]
@@ -128,8 +144,7 @@ def plan_trip(req: TripRequest) -> dict:
         checkpoints = []
         worst, worst_level = 0, RiskLevel.LOW
         for k, (mark, pt, off, cov) in enumerate(zip(p.marks, p.points, p.offsets, p.coverage)):
-            sample = field.at(pt).sample_at(dep_ts + off)
-            risk = assess(sample, req.load_lb)
+            sample, risk = assess_at(p, k, dep_ts + off)
             miles_by_level[risk.level] += cov
             weighted += cov * int(risk.level)
             if risk.level > worst_level:
@@ -207,6 +222,8 @@ def plan_trip(req: TripRequest) -> dict:
             "locations": len(field.series),
             "window_start": _iso(window.start),
             "window_end": _iso(window.end),
+            "scenario": req.scenario,
+            "storm": storm.to_dict() if storm else None,
         },
         "timing_ms": {
             "routing": round((t_routes - t_start) * 1000),
@@ -219,11 +236,14 @@ def plan_trip(req: TripRequest) -> dict:
 HEATMAP_HOURS = 48
 
 
-def plan_heatmap(departure: datetime, load_lb: float, routes_lonlat: list[list[list[float]]]) -> dict:
+def plan_heatmap(
+    departure: datetime, load_lb: float, routes_lonlat: list[list[list[float]]], storm: Storm | None = None
+) -> dict:
     """Hourly (0-48 h) weather and risk on a grid along the trip corridor.
 
     All frames are returned at once so the UI slider never waits on the network.
     Precipitation values at hour ``h`` are totals for the hour ending at ``h``.
+    ``storm`` is the demo-scenario storm returned by the plan, applied identically here.
     """
     t0 = time.perf_counter()
     routes = [[(lat, lon) for lon, lat in r] for r in routes_lonlat]
@@ -238,8 +258,11 @@ def plan_heatmap(departure: datetime, load_lb: float, routes_lonlat: list[list[l
     frames = {"risk": [], "wind": [], "rain": [], "snow": []}
     for h in range(window.hours):
         risk, wind, rain, snow = [], [], [], []
-        for s in series:
+        t = start + h * weather.HOUR
+        for node, s in zip(nodes, series):
             sample = s.hour(h)
+            if storm:
+                sample = storm.apply(sample, node, t)
             risk.append(int(assess(sample, load_lb).level))
             wind.append(round(sample.wind_mph, 1))
             rain.append(round(sample.rain_in_hr, 3))

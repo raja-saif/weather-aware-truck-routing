@@ -110,6 +110,7 @@ class WeatherSample:
     gust_mph: float | None = None
     temperature_f: float | None = None
     weather_code: int | None = None
+    wind_dir_deg: float | None = None  # direction the wind blows FROM (informational)
 
     def to_dict(self) -> dict:
         return {
@@ -119,6 +120,7 @@ class WeatherSample:
             "snow_in_hr": self.snow_in_hr,
             "temperature_f": self.temperature_f,
             "weather_code": self.weather_code,
+            "wind_dir_deg": self.wind_dir_deg,
         }
 
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from rest_framework import serializers
 
+from ..domain.scenario import Storm
 from ..planning import Place, TripRequest, departure_bounds
 from ..services import geocoding
 
@@ -31,6 +32,24 @@ class PlaceSerializer(serializers.Serializer):
         return Place(lat, lon, label)
 
 
+class StormSerializer(serializers.Serializer):
+    """The demo storm exactly as the plan response returned it (bounded to sane values)."""
+
+    lat = serializers.FloatField(min_value=-85, max_value=85)
+    lon = serializers.FloatField(min_value=-180, max_value=180)
+    t0 = serializers.FloatField()
+    v_north_mph = serializers.FloatField(min_value=-60, max_value=60)
+    v_east_mph = serializers.FloatField(min_value=-60, max_value=60)
+    radius_mi = serializers.FloatField(min_value=10, max_value=400)
+    wind_add_mph = serializers.FloatField(min_value=0, max_value=100)
+    gust_add_mph = serializers.FloatField(min_value=0, max_value=120)
+    rain_add_in = serializers.FloatField(min_value=0, max_value=3)
+    snow_add_in = serializers.FloatField(min_value=0, max_value=6)
+
+    def to_storm(self, attrs) -> Storm:
+        return Storm(**attrs)
+
+
 class PlanRequestSerializer(serializers.Serializer):
     origin = PlaceSerializer()
     destination = PlaceSerializer()
@@ -38,6 +57,9 @@ class PlanRequestSerializer(serializers.Serializer):
     load_weight_lb = serializers.FloatField(min_value=0, max_value=MAX_LOAD_LB)
     interval_miles = serializers.ChoiceField(choices=INTERVAL_CHOICES, default=25)
     hos_breaks = serializers.BooleanField(default=True)
+    scenario = serializers.ChoiceField(choices=("live", "storm"), default="live")
+    # Re-planning a demo-storm trip (e.g. a later departure) keeps the same storm.
+    storm = StormSerializer(required=False, allow_null=True)
 
     def validate_departure_time(self, value):
         earliest, latest = departure_bounds()
@@ -57,6 +79,8 @@ class PlanRequestSerializer(serializers.Serializer):
             load_lb=data["load_weight_lb"],
             interval_mi=int(data["interval_miles"]),
             hos=data["hos_breaks"],
+            scenario=data["scenario"],
+            storm=StormSerializer().to_storm(data["storm"]) if data.get("storm") else None,
         )
 
 
@@ -80,8 +104,13 @@ class HeatmapRequestSerializer(serializers.Serializer):
         min_length=1,
         max_length=3,
     )
+    storm = StormSerializer(required=False, allow_null=True)
 
     validate_departure_time = PlanRequestSerializer.validate_departure_time
+
+    def storm_or_none(self) -> Storm | None:
+        attrs = self.validated_data.get("storm")
+        return StormSerializer().to_storm(attrs) if attrs else None
 
 
 class GeocodeQuerySerializer(serializers.Serializer):

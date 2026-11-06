@@ -163,6 +163,39 @@ def test_heatmap_rejects_bad_coordinates(stubbed):
     assert resp.status_code == 400
 
 
+def test_storm_scenario_is_applied_identically_to_plan_and_heatmap(monkeypatch):
+    cache.clear()
+    north, fast, south = _route(2.5, 9.5), _route(0.0, 9.0), _route(-2.5, 9.8)
+    monkeypatch.setattr(routing, "get_routes", lambda o, d, load: ([fast, north, south], []))
+
+    class Calm(_StormField):
+        def at(self, p):
+            return self._series(5.0)
+
+    monkeypatch.setattr(weather, "fetch_field", lambda pts, window, **kw: Calm(window.start))
+    data = _post(_body(scenario="storm", load_weight_lb=35_000)).json()
+    storm = data["weather"]["storm"]
+    assert data["weather"]["scenario"] == "storm" and storm
+    by_id = {r["id"]: r for r in data["routes"]}
+    # the storm sits on the fastest route (A); the far alternatives avoid the worst of it
+    assert by_id["A"]["summary"]["no_travel_miles"] > 0
+    assert data["recommendation"]["route_id"] != "A"
+
+    body = {"departure_time": _body()["departure_time"], "load_weight_lb": 35_000,
+            "routes": [r["geometry"]["coords"] for r in data["routes"]], "storm": storm}
+    hm = Client().post("/api/heatmap", data=json.dumps(body), content_type="application/json").json()
+    assert max(max(f) for f in hm["frames"]["risk"]) == 4
+    assert max(max(f) for f in hm["frames"]["wind"]) > 45
+
+    # re-planning with the same storm keeps it in place (it is not re-centred on the new departure)
+    again = _post(_body(scenario="storm", load_weight_lb=35_000, storm=storm)).json()
+    assert again["weather"]["storm"] == storm
+
+    live = _post(_body(load_weight_lb=35_000)).json()
+    assert live["weather"]["storm"] is None
+    assert all(r["summary"]["avg_risk"] == 0 for r in live["routes"])
+
+
 def test_rules_endpoint():
     data = Client().get("/api/rules").json()
     assert data["conditions"]["wind"]["bounds"] == [25.0, 35.0, 45.0, 55.0]
