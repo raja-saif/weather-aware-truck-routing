@@ -2,7 +2,7 @@
 
 A React + Django app that helps a truck driver choose the safest route. It generates **three route options**, samples the forecast at every checkpoint **at the truck's ETA**, classifies risk with the provided **risk and load rules**, recommends the best route, and shows a **0–48 h weather heatmap** along the trip corridor.
 
-- **Live app:** _add the hosted URL here_
+- **Live app:** https://weather-truck-routing-bfe4.onrender.com/ (free hosting: the first visit after a quiet spell takes 30–60 seconds while the server wakes up)
 - **Walkthrough (Loom):** _add the video link here_
 
 | Recommendation with a demo storm and a 45,000 lb load | Checkpoint details and risk profile |
@@ -94,7 +94,7 @@ Routes are labeled A, B and C from fastest to slowest.
 
 ### 3. Weather at the ETA
 
-- **Provider.** Open-Meteo hourly forecasts, in mph and in/hr.
+- **Provider.** Open-Meteo hourly forecasts, in mph and in/hr. If Open-Meteo refuses (its free tier has a daily per-IP quota, which shared cloud IPs can exhaust), forecasts come from MET Norway's keyless API instead. They are converted to the same units and the same hour-ending precipitation convention, and the plan reports which source was used.
 - **Interpolation.**
   - Wind is instantaneous, so it is interpolated linearly between hours.
   - Rain (rain plus showers) and snow are totals for the preceding hour. The value used is the hour the truck is driving through.
@@ -147,9 +147,10 @@ The UI says which criterion decided each comparison, for example "50 No Travel m
 |---|---|
 | `POST /api/plan` | `{origin, destination, departure_time, load_weight_lb, interval_miles: 10/25/50, hos_breaks, scenario: "live"/"storm"}` returns routes, checkpoints (with crosswind), summaries, the recommendation and the departure advice. |
 | `POST /api/heatmap` | `{departure_time, load_weight_lb, routes: [[lon,lat]...], storm?}` returns the grid and 49 hourly frames. |
-| `GET /api/geocode?q=` | Place suggestions. |
+| `GET /api/geocode?q=` | Place suggestions (Photon, with Open-Meteo's geocoder as fallback). |
 | `GET /api/rules` | Risk table, load rules and ranking criteria. |
 | `GET /api/health` | Liveness check. |
+| `GET /api/health/upstreams` | Reachability and latency of every third-party provider, as seen from the server (cached for a minute). |
 
 Errors are always shaped as `{"error": {"code", "message", "fields?"}}`. Validation errors return 400, unplannable trips 422, and provider problems 502 or 503.
 
@@ -174,13 +175,19 @@ To run the production build locally, run `npm run build` in `frontend`. Django t
 ### Tests
 
 ```bash
-cd backend && .venv/bin/python -m pytest      # 129 tests, no network needed (providers are mocked)
+cd backend && .venv/bin/python -m pytest      # 140 tests, no network needed (providers are mocked)
 cd frontend && npx vitest run && npx tsc -b && npx eslint .
 ```
 
 ## Deployment
 
 The repository is a single Docker image (`Dockerfile`) that builds the frontend, installs the backend and runs gunicorn. `render.yaml` is a ready Render blueprint: create a Blueprint from the repo and it deploys as is. Any Docker host works.
+
+Public APIs behave differently from cloud IPs than from a laptop, so every provider call has a short timeout and a fallback:
+
+- A rate-limited or failing provider is not retried with long waits. It is skipped for a few minutes while the fallback serves requests.
+- The fallbacks are OSRM for Valhalla, MET Norway for Open-Meteo forecasts, and Open-Meteo's geocoder for Photon.
+- Each upstream call is logged with its status and latency, and `/api/health/upstreams` shows which providers the server can reach.
 
 | Environment variable | Default | Purpose |
 |---|---|---|
