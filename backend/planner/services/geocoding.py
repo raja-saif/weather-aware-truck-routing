@@ -1,8 +1,13 @@
-"""Place search via Photon (OpenStreetMap data, built for type-ahead), cached."""
+"""Place search via Photon (OpenStreetMap data, built for type-ahead), cached.
+
+Open-Meteo's geocoder is the fallback when Photon refuses or is down (some
+public endpoints block cloud-hosting IP ranges).
+"""
 
 from __future__ import annotations
 
 import hashlib
+import logging
 import re
 
 import requests
@@ -11,6 +16,8 @@ from django.core.cache import cache
 
 from ..api.errors import PlanningError, UpstreamError
 from .http import session
+
+log = logging.getLogger(__name__)
 
 CACHE_TTL = 24 * 60 * 60
 _LATLON = re.compile(r"^\s*(-?\d{1,2}(?:\.\d+)?)\s*[, ]\s*(-?\d{1,3}(?:\.\d+)?)\s*$")
@@ -47,15 +54,39 @@ def search(query: str, limit: int = 6) -> list[dict]:
     if cached is not None:
         return cached
     try:
-        resp = session().get(
-            settings.PHOTON_URL, params={"q": query, "limit": limit + 4, "lang": "en"}, timeout=(5, 10)
-        )
+        results = _photon(query, limit)
+    except _Unavailable as exc:
+        log.warning("Photon unavailable (%s); falling back to Open-Meteo geocoding", exc)
+        try:
+            results = _open_meteo(query, limit)
+        except _Unavailable as exc2:
+            log.warning("Open-Meteo geocoding unavailable (%s)", exc2)
+            raise UpstreamError("Place search is unavailable right now.", code="geocoding_unavailable") from exc2
+    cache.set(key, results, CACHE_TTL)
+    return results
+
+
+class _Unavailable(Exception):
+    pass
+
+
+def _get(url: str, params: dict) -> dict:
+    try:
+        resp = session().get(url, params=params, timeout=(5, 8))
     except requests.RequestException as exc:
-        raise UpstreamError("Place search is unavailable right now.", code="geocoding_unavailable") from exc
+        raise _Unavailable(str(exc)) from exc
     if resp.status_code != 200:
-        raise UpstreamError("Place search is unavailable right now.", code="geocoding_unavailable")
+        raise _Unavailable(f"HTTP {resp.status_code}")
+    try:
+        return resp.json()
+    except ValueError as exc:
+        raise _Unavailable("invalid JSON") from exc
+
+
+def _photon(query: str, limit: int) -> list[dict]:
+    data = _get(settings.PHOTON_URL, {"q": query, "limit": limit + 4, "lang": "en"})
     results, seen = [], set()
-    for feature in resp.json().get("features", []):
+    for feature in data.get("features", []):
         props = feature.get("properties", {})
         lon, lat = feature["geometry"]["coordinates"][:2]
         label = _label(props)
@@ -65,7 +96,23 @@ def search(query: str, limit: int = 6) -> list[dict]:
         results.append({"label": label, "lat": lat, "lon": lon, "kind": props.get("osm_value") or props.get("type")})
         if len(results) >= limit:
             break
-    cache.set(key, results, CACHE_TTL)
+    return results
+
+
+def _open_meteo(query: str, limit: int) -> list[dict]:
+    """Fallback: Open-Meteo's free geocoder (place names only, no street addresses)."""
+    name = query.split(",")[0].strip()
+    data = _get(settings.OPEN_METEO_GEOCODING_URL, {"name": name, "count": limit, "language": "en", "format": "json"})
+    results, seen = [], set()
+    for r in data.get("results") or []:
+        parts = [r.get("name"), r.get("admin1")]
+        if (r.get("country_code") or "").upper() != "US":
+            parts.append(r.get("country"))
+        label = ", ".join(p for p in parts if p)
+        if not label or label in seen:
+            continue
+        seen.add(label)
+        results.append({"label": label, "lat": r["latitude"], "lon": r["longitude"], "kind": "city"})
     return results
 
 

@@ -4,7 +4,7 @@ from rest_framework.response import Response
 from ..domain.recommend import CRITERIA
 from ..domain.risk import rules_table
 from ..planning import plan_heatmap, plan_trip
-from ..services import geocoding
+from ..services import geocoding, probe
 from .serializers import (
     INTERVAL_CHOICES,
     MAX_LOAD_LB,
@@ -18,6 +18,13 @@ from .serializers import (
 @throttle_classes([])
 def health(request):
     return Response({"status": "ok"})
+
+
+@api_view(["GET"])
+def upstreams(request):
+    """Reachability of each third-party provider from this server (cached for a minute)."""
+    results = probe.check_all()
+    return Response({"ok": all(r["ok"] for r in results.values()), "providers": results})
 
 
 @api_view(["GET"])

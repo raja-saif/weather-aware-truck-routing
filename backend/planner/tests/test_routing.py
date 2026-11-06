@@ -93,6 +93,43 @@ def test_valhalla_distance_limit_falls_back_to_osrm():
     assert routes[0].miles / (routes[0].drive_s / 3600) == pytest.approx(65, abs=0.5)
 
 
+def _osrm_ok():
+    osrm_routes = []
+    for b in (0.0, 1.0, -1.0):
+        coords = _arc(b)
+        osrm_routes.append(
+            {"geometry": encode_polyline(coords), "legs": [{"annotation": {"duration": [10.0] * (len(coords) - 1)}}]}
+        )
+    responses.get(f"{OSRM}/-100.000000,40.000000;-95.000000,40.000000", json={"code": "Ok", "routes": osrm_routes})
+
+
+@responses.activate
+def test_rate_limited_valhalla_fails_fast_and_is_skipped_afterwards():
+    responses.post(VALHALLA, status=429, headers={"Retry-After": "600"})
+    _osrm_ok()
+    routes, notes = routing.get_routes(ORIGIN, DEST, load_lb=20_000)
+    assert routes[0].provider == "osrm-car-capped" and "unavailable" in notes[0]
+    valhalla_calls = sum(1 for c in responses.calls if c.request.url == VALHALLA)
+    assert valhalla_calls == 1  # 429 is not retried and Retry-After is not slept on
+
+    # another trip within the cool-down (different load, so not a route-cache hit) skips Valhalla
+    assert cache.get(routing.VALHALLA_DOWN_KEY) is True
+    routes, _ = routing.get_routes(ORIGIN, DEST, load_lb=30_000)
+    assert routes[0].provider == "osrm-car-capped"
+    assert sum(1 for c in responses.calls if c.request.url == VALHALLA) == 1
+
+
+@responses.activate
+def test_via_search_stops_at_time_budget(monkeypatch):
+    responses.post(VALHALLA, json={"trip": valhalla_trip(_arc(0.0), 4 * 3600)})  # primary only, vias useless
+    clock = iter([0.0, 0.0, 30.0, 30.0, 30.0])  # deadline set, batch 1 starts, then the budget is gone
+    monkeypatch.setattr(routing.time, "monotonic", lambda: next(clock))
+    routes, notes = routing._select(ORIGIN, DEST, routing.ValhallaRouter(55_000))
+    # only the first batch ran: 1 primary call + VIA_BATCH_SIZE via calls
+    assert len(responses.calls) == 1 + routing.VIA_BATCH_SIZE
+    assert "Only 1 distinct" in notes[0]
+
+
 @responses.activate
 def test_no_route_is_a_planning_error():
     responses.post(VALHALLA, status=400, json={"error_code": 442, "error": "No path could be found"})

@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import math
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
@@ -44,6 +45,12 @@ VIA_CANDIDATES = (
     (0.35, 0.18), (0.35, -0.18), (0.65, 0.18), (0.65, -0.18),
 )
 VIA_BATCH_SIZE = 4
+# No new batch of via candidates starts after this many seconds, so a slow
+# public router cannot hold a request for minutes.
+VIA_SEARCH_BUDGET_S = 25.0
+# After Valhalla fails, skip it for a while and go straight to OSRM.
+PROVIDER_DOWN_TTL = 5 * 60
+VALHALLA_DOWN_KEY = "provider-down:valhalla"
 
 
 @dataclass
@@ -264,7 +271,11 @@ def _select(origin: Coord, dest: Coord, router) -> tuple[list[RawRoute], list[st
         return accepted[:TARGET_ROUTES], notes
 
     vias = via_points(origin, dest, accepted[0])
+    deadline = time.monotonic() + VIA_SEARCH_BUDGET_S
     for start in range(0, len(vias), VIA_BATCH_SIZE):
+        if time.monotonic() > deadline:
+            log.warning("%s: via search stopped after %.0f s budget", router.name, VIA_SEARCH_BUDGET_S)
+            break
         batch = vias[start : start + VIA_BATCH_SIZE]
         with ThreadPoolExecutor(max_workers=len(batch)) as pool:
             results = list(pool.map(lambda v: _try_via(router, origin, v, dest), batch))
@@ -312,15 +323,18 @@ def get_routes(origin: Coord, dest: Coord, load_lb: float) -> tuple[list[RawRout
     # All three options must come from one provider so travel times are comparable.
     best: tuple[list[RawRoute], list[str]] | None = None
     fallback_reason = "the truck routing service could not return three options"
-    try:
-        best = _select(origin, dest, ValhallaRouter(gross))
-    except RoutingUnavailable as exc:
-        log.warning("Valhalla unavailable (%s); falling back to OSRM", exc)
-        fallback_reason = (
-            "the free truck routing service is limited to about 930 miles"
-            if "distance limit" in str(exc)
-            else "the truck routing service is unavailable"
-        )
+    if cache.get(VALHALLA_DOWN_KEY):
+        fallback_reason = "the truck routing service is unavailable"
+    else:
+        try:
+            best = _select(origin, dest, ValhallaRouter(gross))
+        except RoutingUnavailable as exc:
+            log.warning("Valhalla unavailable (%s); falling back to OSRM", exc)
+            if "distance limit" in str(exc):
+                fallback_reason = "the free truck routing service is limited to about 930 miles"
+            else:
+                fallback_reason = "the truck routing service is unavailable"
+                cache.set(VALHALLA_DOWN_KEY, True, PROVIDER_DOWN_TTL)
     if best is None or len(best[0]) < TARGET_ROUTES:
         try:
             routes, notes = _select(origin, dest, OsrmRouter())
