@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import type { PlaceInputValue, PlanRequest } from '../api/types'
+import type { PlaceInputValue, PlanRequest, Scenario } from '../api/types'
 import { localTzName, nextQuarterHour, toLocalInput } from '../lib/format'
 import PlaceInput from './PlaceInput'
 
@@ -47,6 +47,7 @@ export default function TripForm({ loading, onSubmit, initial, onCancel }: Props
   const [load, setLoad] = useState(String(initial?.load_weight_lb ?? 42000))
   const [interval, setIntervalMi] = useState<10 | 25 | 50>(initial?.interval_miles ?? 25)
   const [hos, setHos] = useState(initial?.hos_breaks ?? true)
+  const [scenario, setScenario] = useState<Scenario>(initial?.scenario ?? 'live')
   const [error, setError] = useState<string | null>(null)
 
   const submit = (e: React.FormEvent) => {
@@ -63,6 +64,7 @@ export default function TripForm({ loading, onSubmit, initial, onCancel }: Props
       load_weight_lb: loadLb,
       interval_miles: interval,
       hos_breaks: hos,
+      scenario,
     })
   }
 
@@ -145,6 +147,24 @@ export default function TripForm({ loading, onSubmit, initial, onCancel }: Props
       </div>
 
       <div className="row">
+        <div className="field">
+          <span className="label" id="scenario-label">Weather</span>
+          <div className="segmented" role="radiogroup" aria-labelledby="scenario-label">
+            <button type="button" role="radio" aria-checked={scenario === 'live'} className={scenario === 'live' ? 'on' : ''} onClick={() => setScenario('live')}>
+              Live
+            </button>
+            <button
+              type="button"
+              role="radio"
+              aria-checked={scenario === 'storm'}
+              className={scenario === 'storm' ? 'on' : ''}
+              onClick={() => setScenario('storm')}
+              title="Overlay a synthetic storm on the live forecast to demonstrate the risk rules"
+            >
+              Demo storm
+            </button>
+          </div>
+        </div>
         <div className="field">
           <span className="label">Driver rest</span>
           <label className="toggle" title="FMCSA hours of service: 30-min break after 8 h driving, 10-h rest after 11 h">

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ApiError, fetchHeatmap, planTrip } from './api/client'
 import type { HeatMetric, HeatmapResponse, PlanRequest, PlanResponse } from './api/types'
+import { ExtraBadge, IconCalendar, IconTruck, IconWind } from './components/Icons'
 import MapView, { type CheckpointRef } from './components/MapView'
 import RoutePanel, { type PanelTab } from './components/RoutePanel'
 import TimeControl from './components/TimeControl'
@@ -41,7 +42,7 @@ export default function App() {
     heatCtrl.current = ctrl
     setHeatLoading(true)
     setHeatError(null)
-    fetchHeatmap(p.request.departure, p.request.load_lb, p.routes, ctrl.signal)
+    fetchHeatmap(p.request.departure, p.request.load_lb, p.routes, p.weather.storm, ctrl.signal)
       .then(setHeatmap)
       .catch((e) => {
         if (e.name !== 'AbortError') setHeatError(e instanceof ApiError ? e.message : 'Heatmap failed to load.')
@@ -80,6 +81,14 @@ export default function App() {
         })
     },
     [loadHeatmap],
+  )
+
+  const applyDeparture = useCallback(
+    (iso: string) => {
+      // keep the same demo storm so the suggestion and the re-plan see identical weather
+      if (lastRequest) submit({ ...lastRequest, departure_time: iso, storm: plan?.weather.storm ?? null })
+    },
+    [lastRequest, plan, submit],
   )
 
   // Smooth playback: advance fractional hours every animation frame (frames cross-fade).
@@ -154,6 +163,7 @@ export default function App() {
               <span>{Math.round(plan.request.load_lb).toLocaleString()} lb</span>
               <span>every {plan.request.interval_mi} mi</span>
               {plan.request.hos && <span>HOS breaks</span>}
+              {plan.weather.scenario === 'storm' && <span className="storm-chip">Demo storm</span>}
             </span>
           </div>
         )}
@@ -195,6 +205,8 @@ export default function App() {
               selectedCheckpoint={selectedCheckpoint}
               onSelectCheckpoint={selectCheckpoint}
               truckMiles={truckMiles}
+              onApplyDeparture={applyDeparture}
+              planning={planLoading}
             />
           )}
 
@@ -286,6 +298,33 @@ function Intro() {
         ))}
       </div>
 
+      <div className="section-label extras-label">
+        Extras <ExtraBadge />
+      </div>
+      <ul className="extras">
+        <li>
+          <IconCalendar size={15} />
+          <span>
+            <strong>Best departure time.</strong> The same ranking is re-run for departures over the next 24 hours, and a later
+            start is suggested when it avoids No Travel, Severe or High miles.
+          </span>
+        </li>
+        <li>
+          <IconWind size={15} />
+          <span>
+            <strong>Crosswind.</strong> Wind across the trailer at each checkpoint, from the forecast wind direction and the
+            truck's heading. Shown for information only.
+          </span>
+        </li>
+        <li>
+          <IconTruck size={15} />
+          <span>
+            <strong>Live trucks on the timeline.</strong> Each route's truck moves with the forecast slider, parked during
+            rest stops.
+          </span>
+        </li>
+      </ul>
+      <p className="fineprint">Extras never change risk levels or the ranking defined by the brief.</p>
     </section>
   )
 }

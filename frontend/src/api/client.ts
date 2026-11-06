@@ -1,4 +1,4 @@
-import type { HeatmapResponse, PlanRequest, PlanResponse, Route, Suggestion } from './types'
+import type { HeatmapResponse, PlanRequest, PlanResponse, Route, Storm, Suggestion } from './types'
 
 const BASE = import.meta.env.VITE_API_BASE ?? '/api'
 
@@ -67,6 +67,7 @@ export function fetchHeatmap(
   departure: string,
   loadLb: number,
   routes: Route[],
+  storm: Storm | null,
   signal?: AbortSignal,
 ): Promise<HeatmapResponse> {
   return request('/heatmap', {
@@ -75,6 +76,7 @@ export function fetchHeatmap(
       departure_time: departure,
       load_weight_lb: loadLb,
       routes: routes.map((r) => r.geometry.coords),
+      storm,
     }),
     signal,
   })

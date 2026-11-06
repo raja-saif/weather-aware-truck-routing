@@ -2,11 +2,12 @@ import { memo, useState } from 'react'
 import type { PlanResponse, Route } from '../api/types'
 import { fmtDateTime, fmtDuration, fmtMiles, fmtTime } from '../lib/format'
 import { RISK_COLOR, RISK_LABEL, RISK_LEVELS, ROUTE_COLORS } from '../lib/risk'
-import { IconAlert, IconCheck, IconClock, IconFlag, IconInfo, IconRoute } from './Icons'
+import DepartureAdvisor from './DepartureAdvisor'
+import { ExtraBadge, IconAlert, IconCheck, IconClock, IconFlag, IconInfo, IconRoute, IconWind } from './Icons'
 import type { CheckpointRef } from './MapView'
 import RiskProfile from './RiskProfile'
 
-export type PanelTab = 'routes' | 'checkpoints'
+export type PanelTab = 'routes' | 'checkpoints' | 'departure'
 
 interface Props {
   plan: PlanResponse
@@ -17,6 +18,8 @@ interface Props {
   selectedCheckpoint: CheckpointRef | null
   onSelectCheckpoint: (ref: CheckpointRef | null) => void
   truckMiles: Record<string, number | null>
+  onApplyDeparture: (iso: string) => void
+  planning: boolean
 }
 
 export default function RoutePanel(props: Props) {
@@ -37,6 +40,15 @@ export default function RoutePanel(props: Props) {
           <span className="tab-count" title={`Route ${selected.id}: checkpoints above Low`}>
             {riskyCount}
           </span>
+        </>
+      ),
+    },
+    {
+      id: 'departure',
+      label: (
+        <>
+          Departure
+          {plan.departure_advice.suggestion && <span className="tab-dot" title="A safer departure time is available" />}
         </>
       ),
     },
@@ -64,6 +76,15 @@ export default function RoutePanel(props: Props) {
       <div className="tab-body" role="tabpanel" id="results-panel" aria-labelledby={`tab-${tab}`}>
         {tab === 'routes' && (
           <>
+            {plan.weather.scenario === 'storm' && (
+              <div className="demo-banner" role="note">
+                <IconAlert size={15} />
+                <span>
+                  <strong>Demo storm active.</strong> A synthetic storm is overlaid on the live forecast where the fastest
+                  route meets it. Edit the trip and choose “Live forecast” for real conditions.
+                </span>
+              </div>
+            )}
             <Recommendation plan={plan} />
             <div className="section-label">Route options</div>
             <div className="route-cards" role="list">
@@ -102,6 +123,9 @@ export default function RoutePanel(props: Props) {
           </>
         )}
 
+        {tab === 'departure' && (
+          <DepartureAdvisor advice={plan.departure_advice} loading={props.planning} onApply={props.onApplyDeparture} />
+        )}
       </div>
     </div>
   )
@@ -234,6 +258,7 @@ function RouteDetail({ route, selectedCheckpoint, onSelectCheckpoint, truckMiles
   const risky = cps.filter((c) => c.risk.score > 0)
   const rows = showAll ? cps : risky
   const dep = Date.parse(plan.request.departure)
+  const s = route.summary
   return (
     <section className="card route-detail" style={{ ['--route' as string]: ROUTE_COLORS[route.id] }}>
       <div className="card-title">
@@ -255,6 +280,17 @@ function RouteDetail({ route, selectedCheckpoint, onSelectCheckpoint, truckMiles
           ))}
         </div>
       )}
+
+      <div className={`crosswind-summary${s.strong_crosswind_checkpoints ? ' strong' : ''}`}>
+        <IconWind size={15} />
+        <span>
+          Crosswind: max <strong>{s.max_crosswind_mph.toFixed(0)} mph</strong>
+          {s.strong_crosswind_checkpoints > 0
+            ? ` · ${s.strong_crosswind_checkpoints} checkpoint${s.strong_crosswind_checkpoints > 1 ? 's' : ''} with gusts of 30+ mph across the trailer`
+            : ' · no strong crosswind gusts'}
+        </span>
+        <ExtraBadge />
+      </div>
 
       <div className="table-head">
         <span>
@@ -279,6 +315,7 @@ function RouteDetail({ route, selectedCheckpoint, onSelectCheckpoint, truckMiles
                 <th title="Sustained wind (mph)">Wind</th>
                 <th title="Rain (in/hr)">Rain</th>
                 <th title="Snow (in/hr)">Snow</th>
+                <th title="Extra: crosswind component across the truck (mph), informational only">X-wind</th>
               </tr>
             </thead>
             <tbody>
@@ -296,6 +333,7 @@ function RouteDetail({ route, selectedCheckpoint, onSelectCheckpoint, truckMiles
                   <td className={c.risk.by_condition.wind !== 'low' ? 'hot' : ''}>{c.weather.wind_mph.toFixed(0)}</td>
                   <td className={c.risk.by_condition.rain !== 'low' ? 'hot' : ''}>{c.weather.rain_in_hr.toFixed(2)}</td>
                   <td className={c.risk.by_condition.snow !== 'low' ? 'hot' : ''}>{c.weather.snow_in_hr.toFixed(2)}</td>
+                  <td className={c.wind_relative?.strong ? 'warn' : 'dim'}>{c.wind_relative ? c.wind_relative.crosswind_mph.toFixed(0) : '–'}</td>
                 </tr>
               ))}
             </tbody>

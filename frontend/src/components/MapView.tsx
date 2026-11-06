@@ -471,7 +471,25 @@ function detailHtml(routeId: string, cp: Checkpoint, loadLb: number): string {
         ${row('Snow', `${w.snow_in_hr.toFixed(2)} in/hr`, by.snow)}
       </table>
       ${cp.risk.load_rule ? `<div class="cp-rule">Load rule: ${esc(cp.risk.load_rule)} (load ${Math.round(loadLb).toLocaleString()} lb)</div>` : ''}
+      ${crosswindHtml(cp)}
       ${w.temperature_f != null ? `<div class="muted">${w.temperature_f.toFixed(0)}°F · represents ${cp.coverage_mi.toFixed(1)} mi of road</div>` : ''}
+    </div>`
+}
+
+const COMPASS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW']
+const compass = (deg: number) => COMPASS[Math.round((((deg % 360) + 360) % 360) / 45) % 8]
+
+/** Extra feature: wind relative to the truck (informational, not part of the risk level). */
+function crosswindHtml(cp: Checkpoint): string {
+  const r = cp.wind_relative
+  if (!r || cp.weather.wind_dir_deg == null) return ''
+  const along =
+    r.relation === 'crosswind' ? '' : ` · ${Math.abs(r.headwind_mph).toFixed(0)} mph ${r.relation}`
+  return `
+    <div class="cp-cross${r.strong ? ' strong' : ''}">
+      <div class="cp-cross-head"><span>Crosswind</span><span class="extra-badge">Extra</span></div>
+      <div><strong>${r.crosswind_mph.toFixed(0)} mph</strong> across the trailer (gusts ${r.gust_crosswind_mph.toFixed(0)})${esc(along)}</div>
+      <div class="muted">Wind from ${compass(cp.weather.wind_dir_deg)}, truck heading ${compass(r.heading_deg)} · not used in the risk level</div>
     </div>`
 }
 

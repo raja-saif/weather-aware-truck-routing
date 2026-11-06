@@ -21,6 +21,17 @@ export interface Weather {
   snow_in_hr: number
   temperature_f: number | null
   weather_code: number | null
+  wind_dir_deg: number | null
+}
+
+/** Extra feature: wind relative to the truck's heading (informational, not used in ranking). */
+export interface WindRelative {
+  heading_deg: number
+  crosswind_mph: number
+  gust_crosswind_mph: number
+  headwind_mph: number
+  relation: 'headwind' | 'tailwind' | 'crosswind'
+  strong: boolean
 }
 
 export interface Risk {
@@ -42,6 +53,7 @@ export interface Checkpoint {
   coverage_mi: number
   weather: Weather
   risk: Risk
+  wind_relative: WindRelative | null
 }
 
 export interface Stop {
@@ -68,6 +80,8 @@ export interface RouteSummary {
   max_level: RiskKey
   worst_checkpoint: number
   checkpoint_count: number
+  max_crosswind_mph: number
+  strong_crosswind_checkpoints: number
 }
 
 export interface Route {
@@ -94,6 +108,23 @@ export interface Recommendation {
   criteria: string[]
 }
 
+/** Extra feature: the same ranking evaluated for later departures. */
+export interface DepartureOption {
+  shift_h: number
+  departure: string
+  route_id: string
+  no_travel_miles: number
+  severe_miles: number
+  high_miles: number
+  avg_risk: number
+  arrival: string
+}
+
+export interface DepartureAdvice {
+  options: DepartureOption[]
+  suggestion: (DepartureOption & { reason: string }) | null
+}
+
 export interface PlanResponse {
   request: {
     origin: { label: string; lat: number; lon: number }
@@ -105,6 +136,7 @@ export interface PlanResponse {
   }
   routes: Route[]
   recommendation: Recommendation
+  departure_advice: DepartureAdvice
   notes: string[]
   weather: {
     source: string
@@ -112,6 +144,8 @@ export interface PlanResponse {
     locations: number
     window_start: string
     window_end: string
+    scenario: Scenario
+    storm: Storm | null
   }
   timing_ms: { routing: number; weather: number; total: number }
 }
@@ -140,4 +174,12 @@ export interface PlanRequest {
   load_weight_lb: number
   interval_miles: 10 | 25 | 50
   hos_breaks: boolean
+  scenario: Scenario
+  /** Keeps the same demo storm when re-planning (e.g. a later departure). */
+  storm?: Storm | null
 }
+
+export type Scenario = 'live' | 'storm'
+
+/** Synthetic demo storm (opaque to the UI; echoed back to the heatmap endpoint). */
+export type Storm = Record<string, number>
