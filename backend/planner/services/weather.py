@@ -40,7 +40,7 @@ MAX_PARALLEL = 4
 CACHE_TTL = 30 * 60
 HOUR = 3600
 HOURLY_VARS = (
-    "wind_speed_10m", "wind_gusts_10m", "rain", "showers", "snowfall", "weather_code", "temperature_2m",
+    "wind_speed_10m", "wind_gusts_10m", "wind_direction_10m", "rain", "showers", "snowfall", "weather_code", "temperature_2m",
 )
 
 
@@ -57,6 +57,7 @@ class HourlySeries:
     snow: tuple[float, ...]  # snowfall, in/hr
     temp: tuple[float, ...]
     code: tuple[int, ...]
+    wdir: tuple[float, ...] = ()  # direction the wind blows FROM, degrees (optional)
 
     @property
     def hours(self) -> int:
@@ -80,6 +81,7 @@ class HourlySeries:
             snow_in_hr=round(self.snow[ending], 3),
             temperature_f=round(lerp(self.temp), 1),
             weather_code=self.code[ending],
+            wind_dir_deg=round(_lerp_angle(self.wdir[lo], self.wdir[hi], f)) % 360 if self.wdir else None,
         )
 
     def hour(self, k: int) -> WeatherSample:
@@ -87,7 +89,14 @@ class HourlySeries:
         return WeatherSample(
             wind_mph=self.wind[k], gust_mph=self.gust[k], rain_in_hr=self.rain[k], snow_in_hr=self.snow[k],
             temperature_f=self.temp[k], weather_code=self.code[k],
+            wind_dir_deg=self.wdir[k] if self.wdir else None,
         )
+
+
+def _lerp_angle(a: float, b: float, f: float) -> float:
+    """Interpolate compass angles along the shorter arc (350 -> 10 passes through 0)."""
+    diff = (b - a + 180) % 360 - 180
+    return a + diff * f
 
 
 @dataclass(frozen=True)
@@ -138,6 +147,7 @@ def _parse(item: dict, window: Window) -> HourlySeries:
         snow=_clean(h["snowfall"]),
         temp=_clean(h["temperature_2m"]),
         code=tuple(int(c) for c in _clean(h["weather_code"], 0)),
+        wdir=_clean(h.get("wind_direction_10m") or []),
     )
 
 

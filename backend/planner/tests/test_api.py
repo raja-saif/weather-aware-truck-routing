@@ -37,7 +37,7 @@ class _StormField:
             n = 200
             cache[wind] = HourlySeries(
                 start=self.start, wind=(wind,) * n, gust=(wind,) * n, rain=(0.0,) * n,
-                snow=(0.0,) * n, temp=(50.0,) * n, code=(0,) * n,
+                snow=(0.0,) * n, temp=(50.0,) * n, code=(0,) * n, wdir=(0.0,) * n,
             )
         return cache[wind]
 
@@ -109,6 +109,18 @@ def test_heavy_load_turns_wind_band_into_no_travel_and_warns(stubbed):
     cp = next(c for c in data["routes"][0]["checkpoints"] if c["risk"]["level"] == "no_travel")
     assert "30,000" in cp["risk"]["load_rule"]
     assert "No Travel" in data["recommendation"]["warnings"][0]
+
+
+def test_extras_are_informational_and_present(stubbed):
+    data = _post(_body(load_weight_lb=35_000)).json()
+    cp = data["routes"][0]["checkpoints"][3]
+    # stub wind blows from the north across an eastbound route: pure crosswind
+    assert cp["wind_relative"]["relation"] == "crosswind"
+    assert cp["wind_relative"]["crosswind_mph"] == pytest.approx(cp["weather"]["wind_mph"], abs=0.5)
+    advice = data["departure_advice"]
+    assert [o["shift_h"] for o in advice["options"]][:3] == [0, 2, 4]
+    # the stub weather never changes over time, so waiting cannot help
+    assert advice["suggestion"] is None
 
 
 def test_hos_toggle_changes_trip_time_not_drive_time(stubbed):

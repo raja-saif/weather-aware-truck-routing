@@ -9,7 +9,8 @@ from datetime import datetime, timedelta, timezone
 
 from django.conf import settings
 
-from .domain import corridor, geo
+from .domain import corridor, departure, geo
+from .domain.crosswind import heading_at, relative_wind
 from .domain.geo import Coord
 from .domain.recommend import RouteScore, recommend
 from .domain.risk import RiskAssessment, RiskLevel, WeatherSample, assess
@@ -21,6 +22,7 @@ log = logging.getLogger(__name__)
 
 ROUTE_IDS = "ABC"
 GEOMETRY_TOLERANCE_MI = 0.03  # ~50 m: visually lossless at highway zooms
+DEPARTURE_SEARCH_H = max(departure.DEFAULT_SHIFTS_H)
 
 
 @dataclass(frozen=True)
@@ -58,6 +60,7 @@ class _Prepared:
     coverage: list[float]
     points: list[Coord]
     offsets: list[float]
+    headings: list[float]
 
 
 def _prepare(raw: routing.RawRoute, interval: float, hos: HosPolicy) -> _Prepared:
@@ -70,6 +73,7 @@ def _prepare(raw: routing.RawRoute, interval: float, hos: HosPolicy) -> _Prepare
         coverage=geo.coverage_miles(marks),
         points=[geo.point_at(raw.coords, raw.cum_miles, d) for d in marks],
         offsets=[timeline.offset_at(d) for d in marks],
+        headings=[heading_at(raw.coords, raw.cum_miles, d) for d in marks],
     )
 
 
@@ -117,7 +121,10 @@ def plan_trip(req: TripRequest) -> dict:
     t_routes = time.perf_counter()
 
     dep_ts = req.departure.timestamp()
-    window = weather.Window.covering(dep_ts, max(p.timeline.trip_s for p in prepared))
+    # The extra hours let the departure advisor re-score later departures with the same forecasts.
+    window = weather.Window.covering(
+        dep_ts, max(p.timeline.trip_s for p in prepared) + DEPARTURE_SEARCH_H * weather.HOUR
+    )
     field = weather.fetch_field(
         (pt for p in prepared for pt in p.points), window, max_locations=settings.WEATHER_MAX_LOCATIONS
     )
@@ -136,6 +143,15 @@ def plan_trip(req: TripRequest) -> dict:
             sample = storm.apply(sample, p.points[k], t)
         return sample, assess(sample, req.load_lb)
 
+    def score_route(p: _Prepared, rid: str, shift_s: float = 0.0) -> RouteScore:
+        miles = {lvl: 0.0 for lvl in RiskLevel}
+        weighted = 0.0
+        for k, (off, cov) in enumerate(zip(p.offsets, p.coverage)):
+            level = assess_at(p, k, dep_ts + shift_s + off)[1].level
+            miles[level] += cov
+            weighted += cov * int(level)
+        return RouteScore(rid, f"Route {rid}", miles, weighted / p.raw.miles if p.raw.miles else 0.0, p.timeline.trip_s)
+
     routes_out, scores = [], []
     for idx, p in enumerate(prepared):
         rid = ROUTE_IDS[idx]
@@ -143,8 +159,14 @@ def plan_trip(req: TripRequest) -> dict:
         weighted = 0.0
         checkpoints = []
         worst, worst_level = 0, RiskLevel.LOW
+        max_cross, strong_cross = 0.0, 0
         for k, (mark, pt, off, cov) in enumerate(zip(p.marks, p.points, p.offsets, p.coverage)):
             sample, risk = assess_at(p, k, dep_ts + off)
+            rel = None
+            if sample.wind_dir_deg is not None:
+                rel = relative_wind(sample.wind_mph, sample.gust_mph, sample.wind_dir_deg, p.headings[k])
+                max_cross = max(max_cross, rel["crosswind_mph"])
+                strong_cross += rel["strong"]
             miles_by_level[risk.level] += cov
             weighted += cov * int(risk.level)
             if risk.level > worst_level:
@@ -160,6 +182,7 @@ def plan_trip(req: TripRequest) -> dict:
                     "coverage_mi": round(cov, 2),
                     "weather": sample.to_dict(),
                     "risk": risk.to_dict(),
+                    "wind_relative": rel,  # extra, informational: never used for risk or ranking
                 }
             )
         total = p.raw.miles
@@ -185,6 +208,8 @@ def plan_trip(req: TripRequest) -> dict:
                     "max_level": checkpoints[worst]["risk"]["level"],
                     "worst_checkpoint": worst,
                     "checkpoint_count": len(checkpoints),
+                    "max_crosswind_mph": round(max_cross, 1),
+                    "strong_crosswind_checkpoints": strong_cross,
                 },
                 "geometry": geometry,
                 "stops": stops,
@@ -193,6 +218,10 @@ def plan_trip(req: TripRequest) -> dict:
         )
 
     rec = recommend(scores)
+    advice = _departure_advice(
+        departure.evaluate(lambda shift_s: [score_route(p, ROUTE_IDS[i], shift_s) for i, p in enumerate(prepared)]),
+        dep_ts,
+    )
     rank_of = {rid: i + 1 for i, rid in enumerate(rec["ranking"])}
     for r in routes_out:
         r["rank"] = rank_of[r["id"]]
@@ -215,6 +244,7 @@ def plan_trip(req: TripRequest) -> dict:
         },
         "routes": routes_out,
         "recommendation": rec,
+        "departure_advice": advice,
         "notes": notes,
         "weather": {
             "source": "Open-Meteo",
@@ -230,6 +260,29 @@ def plan_trip(req: TripRequest) -> dict:
             "weather": round((t_weather - t_routes) * 1000),
             "total": round((t_end - t_start) * 1000),
         },
+    }
+
+
+def _departure_advice(options: list[departure.DepartureOption], dep_ts: float) -> dict:
+    """Extra feature: the same ranking evaluated for later departures (rules unchanged)."""
+    best, reason = departure.suggest(options)
+
+    def row(o: departure.DepartureOption) -> dict:
+        b = o.best
+        return {
+            "shift_h": o.shift_h,
+            "departure": _iso(dep_ts + o.shift_h * weather.HOUR),
+            "route_id": b.route_id,
+            "no_travel_miles": round(b.no_travel_miles, 1),
+            "severe_miles": round(b.severe_miles, 1),
+            "high_miles": round(b.high_miles, 1),
+            "avg_risk": round(b.avg_risk, 3),
+            "arrival": _iso(dep_ts + o.arrival_offset_s),
+        }
+
+    return {
+        "options": [row(o) for o in options],
+        "suggestion": {**row(best), "reason": reason} if best else None,
     }
 
 
