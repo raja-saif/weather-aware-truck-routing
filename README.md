@@ -3,7 +3,7 @@
 A React + Django app that helps a truck driver choose the safest route. It generates **three route options**, samples the forecast at every checkpoint **at the truck's ETA**, classifies risk with the provided **risk and load rules**, recommends the best route, and shows a **0–48 h weather heatmap** along the trip corridor.
 
 - **Live app:** https://weather-truck-routing-bfe4.onrender.com/ (free hosting: the first visit after a quiet spell takes 30–60 seconds while the server wakes up)
-- **Walkthrough (Loom):** [_add the video link here_](https://www.loom.com/share/2c4c787952744fff8202b19cfa0ee2df)
+- **Walkthrough (Loom):** https://www.loom.com/share/2c4c787952744fff8202b19cfa0ee2df
 
 | Recommendation with a demo storm and a 45,000 lb load | Checkpoint details and risk profile |
 |---|---|
